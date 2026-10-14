@@ -171,7 +171,7 @@ apps/api/
 ├── prisma/
 │   ├── schema.prisma             datasource, 4 models, 3 enums
 │   ├── prisma.config.ts          Prisma 7: URL vem daqui, não do schema
-│   ├── migrations/                7 migrações + migration_lock.toml
+│   ├── migrations/                9 migrações + migration_lock.toml
 │   ├── seed.ts                    seed idempotente
 │   ├── logos/                     havan.png, itaucard.png, nubank.png
 │   └── scripts/import-spreadsheet.ts   importador de .xlsx (CLI)
@@ -355,10 +355,15 @@ o enum. Essa é a origem histórica da regra de bucket.
 | `20260919223000_despesa_bucket_cartao`     | **backfill**: cria cartões padrão por dono (idempotente), deixa `category` anulável, converte `NUBANK`/`ITAUCARD` → `cardId`, recria o enum `Category` |
 | `20260920090000_add_card_logo_url`         | `cards.logoUrl`                                                                                                                                        |
 | `20260920162236_add_installment_group`     | `transactions.installmentGroupId` + índice, com backfill que agrupa por (dono, descrição sem prefixo `i/N`, valor, tipo) quando há 2+ ocorrências      |
-| `20260927000000_enable_rls`                | habilita Row Level Security e cria policies (ver [seção 10](#10-isolamento-por-usuário-e-rls))                                                         |
+| `20260927000000_enable_rls`                | habilita Row Level Security nas tabelas de domínio e cria policies (ver [seção 10](#10-isolamento-por-usuário-e-rls))                                 |
+| `20260930120000_add_recurring_rule_months_ahead` | `recurring_rules.monthsAhead` — horizonte opcional de geração da regra recorrente                                                                |
+| `20261013000000_enable_rls_prisma_migrations` | habilita RLS **sem policy** em `_prisma_migrations` e revoga `anon`/`authenticated` (ver [seção 10](#10-isolamento-por-usuário-e-rls))           |
 
 As migrations de backfill são **idempotentes** (`WHERE NOT EXISTS`, `DROP POLICY IF EXISTS`),
 para poderem ser aplicadas com segurança sobre bancos que já tinham os dados.
+
+`_prisma_migrations` não aparece no `schema.prisma` — o Prisma a cria e mantém sozinho — e
+portanto precisa de uma migration explícita para receber RLS, como a acima.
 
 ---
 
@@ -1015,6 +1020,36 @@ Detalhes importantes:
 - As policies são criadas **somente se `auth.uid()` existir** no banco. Em um PostgreSQL
   sem Supabase, a migration apenas habilita RLS e emite um `RAISE NOTICE`.
 - Cada policy é precedida de `DROP POLICY IF EXISTS`, tornando a migration idempotente.
+
+### 10.1 `_prisma_migrations` (RLS sem policy)
+
+A tabela de bookkeeping do Prisma fica em `public`, que é o schema exposto pelo PostgREST, mas
+**não é uma tabela de domínio**: ela não existe no `schema.prisma` e é criada pelo próprio
+Prisma. Por isso a migration `20260927000000_enable_rls` não a alcançava, e o linter do
+Supabase apontou `RLS Disabled in Public`.
+
+O que ela expunha: nome de cada migration aplicada, checksum, timestamps e o `logs` das
+migrations que falharam. Não há dado de usuário ali, mas é informação de infraestrutura — revela
+o histórico de mudanças do schema, e o log de falha carrega o SQL e o campo `detail` do
+Postgres, que inclui os **valores das linhas** que motivaram a violação. Com a chave `anon`
+(pública por natureza), qualquer pessoa lia isso sem credencial.
+
+`20261013000000_enable_rls_prisma_migrations` resolve em duas camadas:
+
+| Camada              | Efeito                                                                                            |
+| ------------------- | ------------------------------------------------------------------------------------------------- |
+| RLS sem policy      | `anon`/`authenticated` recebem zero linhas em qualquer operação (default deny)                     |
+| `REVOKE` de privilégios | o PostgREST deixa de listar a tabela — ele só expõe no schema cache o que a role pode acessar |
+
+Não há policy de propósito: essa tabela é de uso interno do Prisma e não tem uso legítimo via
+Data API. Como nas tabelas de domínio, é `ENABLE` e não `FORCE` — o owner e as roles com
+`BYPASSRLS` continuam ignorando a RLS, então `prisma migrate deploy`/`resolve` não muda de
+comportamento. `FORCE` quebraria os dois, já que o Prisma precisa ler e escrever essa tabela.
+
+Verificado no Postgres local: com privilégios de tabela concedidos a um role `anon` de teste, a
+RLS sozinha já zera a leitura (`0` linhas) e barra o `INSERT`; com o `REVOKE`, o acesso passa a
+falhar com `permission denied` antes mesmo de a RLS ser avaliada. `prisma migrate status` e a
+API seguem funcionando, e os 101 testes da API passam.
 
 ---
 
