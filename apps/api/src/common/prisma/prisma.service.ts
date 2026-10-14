@@ -35,8 +35,22 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
   }
 
   async onModuleInit(): Promise<void> {
-    await this.$connect();
-    this.logger.log('Conectado ao banco de dados.');
+    // Sem o catch, o Nest aborta o bootstrap quando o banco está fora e o
+    // /health — que existe justamente para diagnosticar a queda — nunca sobe.
+    // A conexão real passa a ocorrer sob demanda.
+    const connected = await this.$connect().then(
+      () => true,
+      () => false,
+    );
+
+    if (connected) {
+      this.logger.log('Conectado ao banco de dados.');
+      return;
+    }
+
+    this.logger.warn(
+      'Banco de dados indisponível no boot; conexões serão tentadas sob demanda.',
+    );
   }
 
   async onModuleDestroy(): Promise<void> {

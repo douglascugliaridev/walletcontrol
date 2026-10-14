@@ -6,7 +6,7 @@ import { loadConfig } from './common/config/configuration';
 import { PrismaModule } from './common/prisma/prisma.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { CardsModule } from './modules/cards/cards.module';
-import { HealthController } from './modules/health/health.controller';
+import { HealthModule } from './modules/health/health.module';
 import { RecurringRulesModule } from './modules/recurring-rules/recurring-rules.module';
 import { TransactionsModule } from './modules/transactions/transactions.module';
 
@@ -22,8 +22,8 @@ import { TransactionsModule } from './modules/transactions/transactions.module';
     CardsModule,
     RecurringRulesModule,
     TransactionsModule,
+    HealthModule,
   ],
-  controllers: [HealthController],
   providers: [
     // Guard global de autenticação (permite @Public() em rotas abertas).
     { provide: APP_GUARD, useClass: JwtAuthGuard },

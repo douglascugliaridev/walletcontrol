@@ -21,6 +21,41 @@ export const Param = () => noopDecorator;
 export const Query = () => noopDecorator;
 export const Headers = () => noopDecorator;
 export const HttpCode = () => noopDecorator;
+export const Res = () => noopDecorator;
+export const SetMetadata = () => noopDecorator;
+export const Inject = () => noopDecorator;
+export const Optional = () => noopDecorator;
+
+/** Logger no-op: os testes verificam chamadas via `jest.spyOn(Logger.prototype, ...)`. */
+export class Logger {
+  log(_message: unknown): void {
+    void _message;
+  }
+  warn(_message: unknown): void {
+    void _message;
+  }
+  error(_message: unknown): void {
+    void _message;
+  }
+  debug(_message: unknown): void {
+    void _message;
+  }
+  verbose(_message: unknown): void {
+    void _message;
+  }
+}
+
+export const HttpStatus = {
+  OK: 200,
+  SERVICE_UNAVAILABLE: 503,
+} as const;
+
+/** Pipes do Nest são configurados em `main.ts`; o stub só precisa ser construível. */
+export class ValidationPipe {
+  constructor(_options?: unknown) {
+    void _options;
+  }
+}
 
 /** Exceções do Nest usam `code`/`status`; aqui só o mensaje importa para o assert. */
 export class NotFoundException extends Error {

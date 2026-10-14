@@ -5,6 +5,9 @@ import { NestFactory } from '@nestjs/core';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { AppModule } from './app.module';
 import { GlobalExceptionFilter } from './common/exceptions/global-exception.filter';
+import { registerProcessGuards } from './common/process/process-guards';
+
+const logger = new Logger('Bootstrap');
 
 /** Configura pipes/filtros/decorators globais da aplicação. */
 function configureApp(app: INestApplication): void {
@@ -21,6 +24,8 @@ function configureApp(app: INestApplication): void {
 }
 
 async function bootstrap(): Promise<void> {
+  registerProcessGuards();
+
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
     bufferLogs: true,
   });
@@ -35,7 +40,7 @@ async function bootstrap(): Promise<void> {
 
   const port = config.getOrThrow<number>('port');
   await app.listen(port);
-  new Logger('Bootstrap').log(
+  logger.log(
     `API walletcontrol rodando em http://localhost:${port}/${config.getOrThrow<string>('apiPrefix')}`,
   );
 }

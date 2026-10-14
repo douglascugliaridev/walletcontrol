@@ -190,7 +190,7 @@ apps/api/
 │   │   ├── cards/                 CRUD de cartões
 │   │   ├── recurring-rules/       CRUD de regras recorrentes
 │   │   ├── transactions/          relatório mensal + CRUD
-│   │   └── health/                health check público
+│   │   └── health/                health check público (SELECT 1 + 503)
 │   └── test/                      fixtures compartilhadas pelos specs
 
 apps/web/
@@ -794,11 +794,71 @@ chaves presentes, e um `null` explícito (enviado de propósito) é preservado, 
 
 ### 7.5 Health — `/api/health`
 
-| Método | Rota      | Auth        | Resposta                                      |
-| ------ | --------- | ----------- | --------------------------------------------- |
-| `GET`  | `/health` | **pública** | `{ status: "ok", timestamp: "2026-09-29T…" }` |
+| Método | Rota        | Auth        | Resposta                                 |
+| ------ | ----------- | ----------- | ---------------------------------------- |
+| `GET`  | `/api/health` | **pública** | `{ status, database }`                  |
 
-Única rota sem use case: está declarada direto em `AppModule.controllers`.
+| Condição          | Status | Body                                     |
+| ----------------- | ------ | ---------------------------------------- |
+| banco respondeu   | `200`  | `{ "status": "ok", "database": "up" }`   |
+| banco caiu/timeout | `503`  | `{ "status": "degraded", "database": "down" }` |
+
+Única rota de infra: `HealthController → HealthService → PrismaService`. Não usa
+use case nem port, porque o módulo é infraestrutura, não domínio.
+
+Quatro decisões deliberadas:
+
+**`SELECT 1` real, com timeout de 3s.** É o único ponto da API que toca o banco
+para verificar saúde — rotas com JWT rodam o guard *antes* do Prisma (401 não
+diz nada sobre o banco) e rotas normais poluem o 503 com detalhe de driver. O
+`Promise.race` impede que um banco travado segure a requisição até o timeout do
+driver e estoure o probe do load balancer. O `.finally(clearTimeout)` evita
+open handle no Jest e event loop vivo em serverless.
+
+**O service nunca relança.** `isDatabaseReachable()` devolve `boolean` e engole
+o erro: é isso que mantém host, usuário e às vezes a URL fora do payload HTTP.
+O motivo fica só no log (`WARN [HealthService] Banco indisponível: …`).
+
+**`@Res({ passthrough: true })` é obrigatório.** Sem `passthrough` o Nest assume
+que a resposta foi assumida e não escreve o body — e o status default de `@Get()`
+seria `200`, então o `503` seria perdido de qualquer forma.
+
+**`@Public()`, porque o guard de auth é global.** Registrado via `APP_GUARD`, ele
+exigiria token em toda rota sem exceção explícita. Precisa responder justamente
+quando o restante da API está exigindo token.
+
+**O boot não depende do banco.** `PrismaService.onModuleInit()` faz
+`$connect().catch()`: sem isso o Nest aborta o bootstrap e o `/health` — que
+existe justamente para diagnosticar a queda — nunca sobe. O efeito é
+**processo vivo ≠ dependência viva**: a API sobe, serve `503` e se recupera
+sozinha quando o banco volta. Verificado: com `DATABASE_URL` apontando para
+porta morta a aplicação sobe e responde `503 {"status":"degraded","database":"down"}`.
+
+**Cuidado:** liveness e readiness estão misturados. **Nunca use este endpoint
+como liveness probe** em k8s/Fly/Render — o orquestrador reiniciaria o processo
+num loop de crash, quando o comportamento correto seria esperar o banco voltar.
+
+**Cron da Vercel** — keepalive diário às 06:00 UTC. O projeto Free do Supabase
+pausa após 1 semana de atividade baixa na janela de 7 dias; o critério é *volume
+na janela*, não "ao menos um acesso", então a cadência precisa ser diária. Um
+ping semanal pode cair exatamente em "too few user queries".
+
+O `vercel.json` fica **na raiz do repositório**, não em `apps/api/`:
+
+```json
+{ "crons": [{ "path": "/api/health", "schedule": "0 6 * * *" }] }
+```
+
+> **O path do cron precisa do prefixo global `api`** — a rota real é
+> `/api/health`, não `/health`. E o arquivo precisa estar na raiz porque o
+> Root Directory de `walletcontrol-api` é a raiz do repo (ver [14.1](#141-deploy)):
+> um `vercel.json` em `apps/api/` é **inerte** e o job nunca registra.
+
+Plano Hobby permite no máximo uma execução por dia (imprecisão de ±1h, o que é
+irrelevante aqui) e **não retenta em falha** — por isso o cron é **prevenção**,
+não garantia. Se o projeto já foi pausado, só *Resume project* no dashboard
+dentro da janela de 1 ano resolve. Confira com `vercel crons ls` e
+`vercel crons run /api/health`.
 
 ---
 
